@@ -36,47 +36,56 @@ $ curl -H "Content-Type: application/json" -X POST -d \
 PS: mail is not really send, because SMTP config is wrong.
 
 */
-var path = require('path')
-var templatesDir = path.resolve(__dirname, '..', 'templates')
-var EmailTemplate = require('../../').EmailTemplate
-var nodemailer = require('nodemailer')
-var kue = require('kue')
-var EventEmitter = require('events').EventEmitter
+var path = require('path'),
+  templatesDir = path.resolve(__dirname, '..', 'templates'),
+  emailTemplates = require('../../'),
+  nodemailer = require('nodemailer'),
+  kue = require('kue');
 
-var deliver = new EventEmitter()
-var jobs = kue.createQueue()
-kue.app.listen(3000)
+var events = require("events");
+var deliver = new events.EventEmitter();
 
-jobs.process('postbox', function (job, done) {
-  deliver.emit(job.data.template, job.data, done)
-})
+var jobs = kue.createQueue();
+kue.app.listen(3000);
 
-var template = new EmailTemplate(path.join(templatesDir, 'newsletter'))
-var transport = nodemailer.createTransport({
-  service: 'Gmail',
-  auth: {
-    user: 'some-user@gmail.com',
-    pass: 'some-password'
-  }
-})
+jobs.process('postbox', function(job, done) {
+  deliver.emit(job.data.template, job.data, done);
+});
 
-deliver.on('newsletter', function (data, done) {
-  template.render(data.params, function (err, results) {
-    if (err) return done(err)
 
-    transport.sendMail({
-      from: 'Spicy Meatball <spicy.meatball@spaghetti.com>',
-      to: data.to,
-      subject: data.title,
-      html: results.html,
-      text: results.text
-    }, function (err, responseStatus) {
-      if (err) {
-        console.error(err)
-        return done(err)
+emailTemplates(templatesDir, function(err, template) {
+  if (err) {
+    console.log(err);
+  } else {
+    // Prepare nodemailer transport object
+    var transport = nodemailer.createTransport("SMTP", {
+      service: "Gmail",
+      auth: {
+        user: "some-user@gmail.com",
+        pass: "some-password"
       }
-      console.log(responseStatus.message)
-      done()
-    })
-  })
-})
+    });
+
+    template('newsletter', true, function(err, batch) {
+      deliver.on('newsletter', function(data, done) {
+        batch(data.params, templatesDir, function(err, html, text) {
+          transport.sendMail({
+            from: 'Spicy Meatball <spicy.meatball@spaghetti.com>',
+            to: data.to,
+            subject: data.title,
+            html: html,
+            text: text
+          }, function(err, responseStatus) {
+            if (err) {
+              console.log(err);
+              done(err);
+            } else {
+              done();
+              console.log(responseStatus.message);
+            }
+          });
+        });
+      });
+    });
+  }
+});
